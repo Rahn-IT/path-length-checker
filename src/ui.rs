@@ -1,10 +1,10 @@
 use std::{mem, path::PathBuf, sync::Arc, time::Duration};
 
 use iced::{
-    Background, Length, Task,
+    Length, Task,
     alignment::Vertical,
     task::sipper,
-    widget::{button, column, container, row, scrollable, text, text_input},
+    widget::{button, column, row, scrollable, text, text_input},
 };
 use rfd::{AsyncFileDialog, FileHandle};
 use tokio::{fs, time::Instant};
@@ -116,6 +116,7 @@ impl UI {
                     self.paths_over_limit.clear();
                     self.errors.clear();
                     self.scanned = 0;
+                    self.export_message = None;
                     let token = CancellationToken::new();
                     self.cancellation_token = Some(token.clone());
                     self.scan_limit = self.limit;
@@ -147,24 +148,57 @@ impl UI {
                             .await;
 
                         if let Some(file_handle) = file_handle {
-                            let mut csv_content = String::from("Path,Length\n");
                             let export_count = paths_to_export.len();
-                            for path in &paths_to_export {
-                                csv_content.push_str(&format!(
-                                    "\"{}\",{}\n",
-                                    path.path.replace("\"", "\"\""),
-                                    path.size
-                                ));
-                            }
+                            let file_path = file_handle.path().to_path_buf();
 
-                            match tokio::fs::write(file_handle.path(), csv_content).await {
-                                Ok(_) => Message::CsvExportComplete(Ok(format!(
-                                    "Exported {} paths to {}",
-                                    export_count,
-                                    file_handle.path().display()
-                                ))),
+                            match tokio::fs::File::create(&file_path).await {
+                                Ok(mut file) => {
+                                    use tokio::io::AsyncWriteExt;
+
+                                    // Write CSV header
+                                    if let Err(e) = file.write_all(b"Length,Path\n").await {
+                                        return Message::CsvExportComplete(Err(format!(
+                                            "Failed to write CSV header: {}",
+                                            e
+                                        )));
+                                    }
+
+                                    // Write in chunks of 1000 lines
+                                    for chunk in paths_to_export.chunks(1000) {
+                                        let mut chunk_content = String::new();
+                                        for path in chunk {
+                                            chunk_content.push_str(&format!(
+                                                "\"{}\",{}\n",
+                                                path.size,
+                                                path.path.replace("\"", "\"\""),
+                                            ));
+                                        }
+
+                                        if let Err(e) =
+                                            file.write_all(chunk_content.as_bytes()).await
+                                        {
+                                            return Message::CsvExportComplete(Err(format!(
+                                                "Failed to write CSV chunk: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+
+                                    if let Err(e) = file.flush().await {
+                                        return Message::CsvExportComplete(Err(format!(
+                                            "Failed to flush CSV file: {}",
+                                            e
+                                        )));
+                                    }
+
+                                    Message::CsvExportComplete(Ok(format!(
+                                        "Exported {} paths to {}",
+                                        export_count,
+                                        file_path.display()
+                                    )))
+                                }
                                 Err(e) => Message::CsvExportComplete(Err(format!(
-                                    "Failed to write CSV file: {}",
+                                    "Failed to create CSV file: {}",
                                     e
                                 ))),
                             }
@@ -194,11 +228,20 @@ impl UI {
 
     pub fn view(&self) -> iced::Element<Message> {
         let main_controls = column![
-            button(text("Select Folder")).on_press_maybe(if self.selecting {
-                None
-            } else {
-                Some(Message::SelectFolder)
-            }),
+            row![
+                button(text("Select Folder")).on_press_maybe(if self.selecting {
+                    None
+                } else {
+                    Some(Message::SelectFolder)
+                }),
+                if let Some(selected) = &self.selected {
+                    text(selected.to_string_lossy())
+                } else {
+                    text("")
+                }
+            ]
+            .spacing(10)
+            .align_y(Vertical::Center),
             row![
                 text("Path Length Limit:"),
                 text_input("", &self.limit_input)
@@ -238,10 +281,6 @@ impl UI {
 
         let mut content = column![main_controls].spacing(20);
 
-        if let Some(selected) = &self.selected {
-            content = content.push(text(format!("Selected: {}", selected.to_string_lossy())));
-        }
-
         if self.cancellation_token.is_some() {
             content =
                 content.push(text(format!("Scanning... {} paths checked", self.scanned)).size(16));
@@ -280,27 +319,10 @@ impl UI {
                 .size(18)
                 .color(iced::Color::from_rgb(0.8, 0.2, 0.2));
 
-            let errors_list = scrollable(
-                self.errors
-                    .iter()
-                    .fold(column![], |col, error| {
-                        col.push(container(text(error).size(12)).padding(10).style(|_| {
-                            container::Style {
-                                background: Some(Background::Color(iced::Color::from_rgb(
-                                    1.0, 0.95, 0.95,
-                                ))),
-                                border: iced::Border {
-                                    color: iced::Color::from_rgb(0.8, 0.6, 0.6),
-                                    width: 1.0,
-                                    radius: 0.0.into(),
-                                },
-                                ..Default::default()
-                            }
-                        }))
-                    })
-                    .spacing(5),
-            )
-            .height(Length::Fixed(150.0));
+            let errors_list =
+                scrollable(column(self.errors.iter().map(|error| text(error).into())))
+                    .height(Length::Fill)
+                    .width(Length::Fill);
 
             content = content.push(errors_title).push(errors_list);
         }
