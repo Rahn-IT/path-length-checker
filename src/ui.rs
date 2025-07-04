@@ -33,6 +33,7 @@ pub struct UI {
     scanned: u64,
     limit_input: String,
     limit: usize,
+    scan_limit: usize,
     errors: Vec<String>,
 }
 
@@ -53,6 +54,7 @@ impl UI {
                 scanned: 0,
                 limit_input: "240".to_string(),
                 limit: 240,
+                scan_limit: 240,
                 errors: Vec::new(),
             },
             Task::none(),
@@ -108,6 +110,7 @@ impl UI {
                     self.scanned = 0;
                     let token = CancellationToken::new();
                     self.cancellation_token = Some(token.clone());
+                    self.scan_limit = self.limit;
                     self.start_scan(folder.clone(), self.limit, token)
                 } else {
                     Task::none()
@@ -173,21 +176,21 @@ impl UI {
             let results_title = text(format!(
                 "Found {} paths over limit ({})",
                 self.paths_over_limit.len(),
-                self.limit
+                self.scan_limit
             ))
             .size(18);
 
-            let results_list = scrollable(column(self.paths_over_limit.iter().map(|over_limit| {
-                row![
-                    container(text(over_limit.size)).width(50),
-                    text(&over_limit.path),
-                ]
-                .into()
-            })))
-            .height(Length::Fill)
-            .width(Length::Fill);
+            // let results_list = scrollable(column(self.paths_over_limit.iter().map(|over_limit| {
+            //     row![
+            //         container(text(over_limit.size)).width(50),
+            //         text(&over_limit.path),
+            //     ]
+            //     .into()
+            // })))
+            // .height(Length::Fill)
+            // .width(Length::Fill);
 
-            content = content.push(results_title).push(results_list);
+            content = content.push(results_title);
         }
 
         if !self.errors.is_empty() {
