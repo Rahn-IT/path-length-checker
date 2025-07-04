@@ -294,6 +294,13 @@ impl UI {
                             }
                         }
                     }
+
+                    sender
+                        .send(Message::ScanUpdate {
+                            now_scanned: scanned,
+                            new_paths_over_limit: mem::take(&mut over_limit),
+                        })
+                        .await;
                 })
                 .await;
         });
