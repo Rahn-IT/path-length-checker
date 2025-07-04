@@ -1,15 +1,13 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{mem, path::PathBuf, sync::Arc, time::Duration};
 
 use iced::{
-    Task,
-    task::{Sipper, sipper},
-    widget::{button, column, row, text},
+    Background, Length, Task,
+    alignment::Vertical,
+    task::sipper,
+    widget::{button, column, container, row, scrollable, text, text_input},
 };
 use rfd::{AsyncFileDialog, FileHandle};
-use tokio::fs;
+use tokio::{fs, time::Instant};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone)]
@@ -18,8 +16,13 @@ pub enum Message {
     SelectedFolder(Option<Arc<FileHandle>>),
     AbortScan,
     ScanComplete,
-    FoundOverLimit(OverLimit),
     Error(String),
+    LimitChanged(String),
+    StartScan,
+    ScanUpdate {
+        now_scanned: u64,
+        new_paths_over_limit: Vec<OverLimit>,
+    },
 }
 
 pub struct UI {
@@ -28,10 +31,13 @@ pub struct UI {
     cancellation_token: Option<CancellationToken>,
     paths_over_limit: Vec<OverLimit>,
     scanned: u64,
+    limit_input: String,
+    limit: usize,
+    errors: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-struct OverLimit {
+pub struct OverLimit {
     path: PathBuf,
     size: u64,
 }
@@ -45,6 +51,9 @@ impl UI {
                 cancellation_token: None,
                 paths_over_limit: Vec::new(),
                 scanned: 0,
+                limit_input: "240".to_string(),
+                limit: 240,
+                errors: Vec::new(),
             },
             Task::none(),
         )
@@ -65,7 +74,6 @@ impl UI {
                     if let Some(selected) = Arc::into_inner(selected) {
                         let selected: PathBuf = selected.path().into();
                         self.selected = Some(selected.clone());
-                        // Start Scan here
                     }
                 }
                 Task::none()
@@ -76,44 +84,142 @@ impl UI {
                 }
                 Task::none()
             }
-            Message::FoundOverLimit(over_limit) => {
-                self.paths_over_limit.push(over_limit);
-                Task::none()
-            }
             Message::ScanComplete => {
                 if let Some(token) = self.cancellation_token.take() {
                     token.cancel();
                 }
-
                 Task::none()
             }
             Message::Error(err) => {
-                panic!("{}", err);
+                self.errors.push(err);
+                Task::none()
+            }
+            Message::LimitChanged(limit) => {
+                self.limit_input = limit.clone();
+                if let Ok(parsed) = limit.parse::<usize>() {
+                    self.limit = parsed;
+                }
+                Task::none()
+            }
+            Message::StartScan => {
+                if let Some(ref folder) = self.selected {
+                    self.paths_over_limit.clear();
+                    self.errors.clear();
+                    self.scanned = 0;
+                    let token = CancellationToken::new();
+                    self.cancellation_token = Some(token.clone());
+                    self.start_scan(folder.clone(), self.limit, token)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::ScanUpdate {
+                now_scanned,
+                new_paths_over_limit,
+            } => {
+                self.scanned = now_scanned;
+                self.paths_over_limit.extend(new_paths_over_limit);
+                Task::none()
             }
         }
     }
 
     pub fn view(&self) -> iced::Element<Message> {
-        column![row![
+        let main_controls = column![
             button(text("Select Folder")).on_press_maybe(if self.selecting {
                 None
             } else {
                 Some(Message::SelectFolder)
             }),
-            button(text("Abort")).on_press_maybe(if self.cancellation_token.is_some() {
-                Some(Message::AbortScan)
-            } else {
-                None
-            }),
-        ],]
-        .push_maybe(
-            self.selected
-                .as_ref()
-                .map(|selected| text(selected.to_string_lossy())),
-        )
-        .padding(20)
-        .spacing(20)
-        .into()
+            row![
+                text("Path Length Limit:"),
+                text_input("260", &self.limit_input)
+                    .on_input(Message::LimitChanged)
+                    .width(Length::Fixed(100.0)),
+            ]
+            .spacing(10)
+            .align_y(Vertical::Center),
+            row![
+                button(text("Start Scan")).on_press_maybe(
+                    if self.selected.is_some() && !self.cancellation_token.is_some() {
+                        Some(Message::StartScan)
+                    } else {
+                        None
+                    }
+                ),
+                button(text("Abort")).on_press_maybe(if self.cancellation_token.is_some() {
+                    Some(Message::AbortScan)
+                } else {
+                    None
+                }),
+            ]
+            .spacing(10),
+        ]
+        .spacing(10);
+
+        let mut content = column![main_controls].spacing(20);
+
+        if let Some(selected) = &self.selected {
+            content = content.push(text(format!("Selected: {}", selected.to_string_lossy())));
+        }
+
+        if self.cancellation_token.is_some() {
+            content =
+                content.push(text(format!("Scanning... {} paths checked", self.scanned)).size(16));
+        }
+
+        if !self.paths_over_limit.is_empty() {
+            let results_title = text(format!(
+                "Found {} paths over limit ({})",
+                self.paths_over_limit.len(),
+                self.limit
+            ))
+            .size(18);
+
+            let results_list = scrollable(column(self.paths_over_limit.iter().map(|over_limit| {
+                row![
+                    container(text(over_limit.size)).width(50),
+                    text(over_limit.path.to_string_lossy()),
+                ]
+                .into()
+            })))
+            .height(Length::Fill)
+            .width(Length::Fill);
+
+            content = content.push(results_title).push(results_list);
+        }
+
+        if !self.errors.is_empty() {
+            let errors_title = text(format!("Errors ({})", self.errors.len()))
+                .size(18)
+                .color(iced::Color::from_rgb(0.8, 0.2, 0.2));
+
+            let errors_list = scrollable(
+                self.errors
+                    .iter()
+                    .fold(column![], |col, error| {
+                        col.push(container(text(error).size(12)).padding(10).style(|_| {
+                            container::Style {
+                                background: Some(Background::Color(iced::Color::from_rgb(
+                                    1.0, 0.95, 0.95,
+                                ))),
+                                border: iced::Border {
+                                    color: iced::Color::from_rgb(0.8, 0.6, 0.6),
+                                    width: 1.0,
+                                    radius: 0.0.into(),
+                                },
+                                ..Default::default()
+                            }
+                        }))
+                    })
+                    .spacing(5),
+            )
+            .height(Length::Fixed(150.0));
+
+            content = content.push(errors_title).push(errors_list);
+        }
+
+        content.padding(20).into()
     }
 
     fn start_scan(
@@ -125,47 +231,73 @@ impl UI {
         let sipper = sipper(move |mut sender| async move {
             let mut stack = vec![root];
 
-            token.run_until_cancelled(async move {
-                while let Some(path) = stack.pop() {
-                    match fs::read_dir(path).await {
-                        Ok(mut entries) => match entries.next_entry().await {
-                            Ok(Some(entry)) => {
-                                let path = entry.path();
-                                let path_length = path.as_os_str().len();
+            let mut scanned: u64 = 0;
+            let mut over_limit: Vec<OverLimit> = Vec::new();
+            let mut last_update = Instant::now();
 
-                                match entry.metadata().await {
-                                    Ok(metadata) => {
-                                        if metadata.is_dir() {
-                                            stack.push(path.clone());
+            token
+                .run_until_cancelled(async move {
+                    while let Some(path) = stack.pop() {
+                        match fs::read_dir(&path).await {
+                            Ok(mut entries) => {
+                                while let Ok(Some(entry)) = entries.next_entry().await {
+                                    let entry_path = entry.path();
+                                    let path_length = entry_path.as_os_str().len();
+
+                                    if path_length > limit {
+                                        over_limit.push(OverLimit {
+                                            path: entry_path.clone(),
+                                            size: path_length as u64,
+                                        });
+                                    }
+
+                                    match entry.metadata().await {
+                                        Ok(metadata) => {
+                                            if metadata.is_dir() {
+                                                stack.push(entry_path);
+                                            }
+                                        }
+                                        Err(err) => {
+                                            sender
+                                                .send(Message::Error(format!(
+                                                    "Error reading metadata for {}: {}",
+                                                    entry_path.display(),
+                                                    err
+                                                )))
+                                                .await;
                                         }
                                     }
-                                    Err(err) => sender.send(Message::Error(err.to_string())).await,
-                                }
 
-                                if path_length > limit {
-                                    sender
-                                        .send(Message::FoundOverLimit(OverLimit {
-                                            path: path,
-                                            size: path_length as u64,
-                                        }))
-                                        .await;
-                                } else {
-                                    stack.push(entry.path());
+                                    scanned += 1;
+
+                                    println!("scanned: {}", scanned);
+                                    let now = Instant::now();
+                                    if now - last_update > Duration::from_millis(100) {
+                                        sender
+                                            .send(Message::ScanUpdate {
+                                                now_scanned: scanned,
+                                                new_paths_over_limit: mem::take(&mut over_limit),
+                                            })
+                                            .await;
+                                        last_update = now;
+                                    }
                                 }
                             }
-                            Ok(None) => (),
                             Err(err) => {
-                                sender.send(Message::Error(err.to_string())).await;
+                                sender
+                                    .send(Message::Error(format!(
+                                        "Error reading directory {}: {}",
+                                        path.display(),
+                                        err
+                                    )))
+                                    .await;
                             }
-                        },
-                        Err(err) => {
-                            sender.send(Message::Error(err.to_string())).await;
                         }
                     }
-                }
-            });
+                })
+                .await;
         });
 
-        Task::sip(sipper, |value| value, |value| Message::ScanComplete)
+        Task::sip(sipper, |value| value, |_| Message::ScanComplete)
     }
 }
