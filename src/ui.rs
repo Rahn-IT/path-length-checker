@@ -38,7 +38,7 @@ pub struct UI {
 
 #[derive(Debug, Clone)]
 pub struct OverLimit {
-    path: PathBuf,
+    path: String,
     size: u64,
 }
 
@@ -133,8 +133,9 @@ impl UI {
             }),
             row![
                 text("Path Length Limit:"),
-                text_input("260", &self.limit_input)
+                text_input("", &self.limit_input)
                     .on_input(Message::LimitChanged)
+                    .on_submit(Message::StartScan)
                     .width(Length::Fixed(100.0)),
             ]
             .spacing(10)
@@ -179,7 +180,7 @@ impl UI {
             let results_list = scrollable(column(self.paths_over_limit.iter().map(|over_limit| {
                 row![
                     container(text(over_limit.size)).width(50),
-                    text(over_limit.path.to_string_lossy()),
+                    text(&over_limit.path),
                 ]
                 .into()
             })))
@@ -246,7 +247,10 @@ impl UI {
 
                                     if path_length > limit {
                                         over_limit.push(OverLimit {
-                                            path: entry_path.clone(),
+                                            path: entry_path
+                                                .as_os_str()
+                                                .to_string_lossy()
+                                                .to_string(),
                                             size: path_length as u64,
                                         });
                                     }
@@ -270,7 +274,6 @@ impl UI {
 
                                     scanned += 1;
 
-                                    println!("scanned: {}", scanned);
                                     let now = Instant::now();
                                     if now - last_update > Duration::from_millis(100) {
                                         sender
