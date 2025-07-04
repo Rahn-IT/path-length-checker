@@ -23,6 +23,8 @@ pub enum Message {
         now_scanned: u64,
         new_paths_over_limit: Vec<OverLimit>,
     },
+    ExportCsv,
+    CsvExportComplete(Result<String, String>),
 }
 
 pub struct UI {
@@ -35,6 +37,9 @@ pub struct UI {
     limit: usize,
     scan_limit: usize,
     errors: Vec<String>,
+    exporting: bool,
+    export_message: Option<String>,
+    export_success: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +61,9 @@ impl UI {
                 limit: 240,
                 scan_limit: 240,
                 errors: Vec::new(),
+                exporting: false,
+                export_message: None,
+                export_success: false,
             },
             Task::none(),
         )
@@ -124,6 +132,63 @@ impl UI {
                 self.paths_over_limit.extend(new_paths_over_limit);
                 Task::none()
             }
+            Message::ExportCsv => {
+                if self.paths_over_limit.is_empty() {
+                    Task::none()
+                } else {
+                    self.exporting = true;
+                    self.export_message = None;
+                    let paths_to_export = self.paths_over_limit.clone();
+                    Task::future(async move {
+                        let file_handle = AsyncFileDialog::new()
+                            .set_file_name("path_length_report.csv")
+                            .add_filter("CSV", &["csv"])
+                            .save_file()
+                            .await;
+
+                        if let Some(file_handle) = file_handle {
+                            let mut csv_content = String::from("Path,Length\n");
+                            let export_count = paths_to_export.len();
+                            for path in &paths_to_export {
+                                csv_content.push_str(&format!(
+                                    "\"{}\",{}\n",
+                                    path.path.replace("\"", "\"\""),
+                                    path.size
+                                ));
+                            }
+
+                            match tokio::fs::write(file_handle.path(), csv_content).await {
+                                Ok(_) => Message::CsvExportComplete(Ok(format!(
+                                    "Exported {} paths to {}",
+                                    export_count,
+                                    file_handle.path().display()
+                                ))),
+                                Err(e) => Message::CsvExportComplete(Err(format!(
+                                    "Failed to write CSV file: {}",
+                                    e
+                                ))),
+                            }
+                        } else {
+                            Message::CsvExportComplete(Err("Export cancelled".to_string()))
+                        }
+                    })
+                }
+            }
+            Message::CsvExportComplete(result) => {
+                self.exporting = false;
+                match result {
+                    Ok(success_msg) => {
+                        self.export_message = Some(success_msg);
+                        self.export_success = true;
+                        Task::none()
+                    }
+                    Err(error_msg) => {
+                        self.export_message = Some(error_msg);
+                        self.export_success = false;
+                        Task::none()
+                    }
+                }
+            }
         }
     }
 
@@ -156,6 +221,16 @@ impl UI {
                 } else {
                     None
                 }),
+                button(text("Export CSV")).on_press_maybe(
+                    if !self.paths_over_limit.is_empty()
+                        && !self.exporting
+                        && self.cancellation_token.is_none()
+                    {
+                        Some(Message::ExportCsv)
+                    } else {
+                        None
+                    }
+                ),
             ]
             .spacing(10),
         ]
@@ -180,17 +255,24 @@ impl UI {
             ))
             .size(18);
 
-            // let results_list = scrollable(column(self.paths_over_limit.iter().map(|over_limit| {
-            //     row![
-            //         container(text(over_limit.size)).width(50),
-            //         text(&over_limit.path),
-            //     ]
-            //     .into()
-            // })))
-            // .height(Length::Fill)
-            // .width(Length::Fill);
-
             content = content.push(results_title);
+        }
+
+        if self.exporting {
+            content = content.push(text("Exporting to CSV...").size(16));
+        }
+
+        if let Some(ref message) = self.export_message {
+            let export_text = if self.export_success {
+                text(message)
+                    .size(16)
+                    .color(iced::Color::from_rgb(0.0, 0.6, 0.0))
+            } else {
+                text(message)
+                    .size(16)
+                    .color(iced::Color::from_rgb(0.8, 0.2, 0.2))
+            };
+            content = content.push(export_text);
         }
 
         if !self.errors.is_empty() {
