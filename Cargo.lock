@@ -1600,6 +1600,7 @@ dependencies = [
  "iced_debug",
  "iced_futures",
  "raw-window-handle 0.6.2",
+ "sipper",
  "thiserror 1.0.69",
 ]
 
@@ -2528,6 +2529,8 @@ version = "0.1.0"
 dependencies = [
  "iced",
  "rfd",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3048,6 +3051,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d66dc143e6b11c1eddc06d5c423cfc97062865baf299914ab64caa38182078fe"
 
 [[package]]
+name = "sipper"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bccb4192828b3d9a08e0b5a73f17795080dfb278b50190216e3ae2132cf4f95"
+dependencies = [
+ "futures",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "skrifa"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3426,6 +3439,21 @@ dependencies = [
  "socket2 0.5.10",
  "tracing",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.7.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66a539a9ad6d5d281510d5bd368c973d636c02dbf8a67300bfb6b950696ad7df"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "futures-util",
+ "hashbrown",
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]

@@ -7,8 +7,11 @@ edition = "2024"
 iced = { git = "https://github.com/iced-rs/iced.git", features = [
     "wgpu",
     "tokio",
+    "sipper",
 ] }
 rfd = { version = "0.13", features = [
     "tokio",
     "xdg-portal",
 ], default-features = false }
+tokio = { version = "1.46.1", features = ["fs"] }
+tokio-util = { version = "0.7.15", features = ["rt"] }
