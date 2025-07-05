@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use iced::application;
 
 use crate::ui::UI;
