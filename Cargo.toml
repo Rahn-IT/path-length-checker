@@ -13,5 +13,5 @@ rfd = { version = "0.13", features = [
     "tokio",
     "xdg-portal",
 ], default-features = false }
-tokio = { version = "1.46.1", features = ["fs"] }
+tokio = { version = "1.46.1", features = ["fs", "io-util"] }
 tokio-util = { version = "0.7.15", features = ["rt"] }

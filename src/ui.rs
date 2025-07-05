@@ -7,7 +7,7 @@ use iced::{
     widget::{button, column, row, scrollable, text, text_input},
 };
 use rfd::{AsyncFileDialog, FileHandle};
-use tokio::{fs, time::Instant};
+use tokio::{fs, io::AsyncWriteExt, time::Instant};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone)]
@@ -153,8 +153,6 @@ impl UI {
 
                             match tokio::fs::File::create(&file_path).await {
                                 Ok(mut file) => {
-                                    use tokio::io::AsyncWriteExt;
-
                                     // Write CSV header
                                     if let Err(e) = file.write_all(b"Length,Path\n").await {
                                         return Message::CsvExportComplete(Err(format!(
