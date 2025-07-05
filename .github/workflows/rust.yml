@@ -17,6 +17,7 @@ jobs:
       uses: rust-build/rust-build.action@v1.4.5
       with:
         RUSTTARGET: x86_64-pc-windows-gnu
+        TOOLCHAIN_VERSION: latest
         UPLOAD_MODE: none
 
     - name: Upload Windows release binary
