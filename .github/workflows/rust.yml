@@ -12,15 +12,14 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-    
+
     - name: install rust
       uses: dtolnay/rust-toolchain@stable
-
-    - name: Compile
-      uses: rust-build/rust-build.action@v1.4.5
       with:
-        RUSTTARGET: x86_64-pc-windows-gnu
-        UPLOAD_MODE: none
+        targets: x86_64-pc-windows-msvc
+
+    - name: Build release binary for Windows
+      run: cargo build --release --target x86_64-pc-windows-msvc
 
     - name: Upload Windows release binary
       uses: softprops/action-gh-release@v2
