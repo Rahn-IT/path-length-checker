@@ -154,7 +154,7 @@ impl UI {
                             match tokio::fs::File::create(&file_path).await {
                                 Ok(mut file) => {
                                     // Write CSV header
-                                    if let Err(e) = file.write_all(b"Length,Path\n").await {
+                                    if let Err(e) = file.write_all(b"Length;Path\n").await {
                                         return Message::CsvExportComplete(Err(format!(
                                             "Failed to write CSV header: {}",
                                             e
@@ -166,9 +166,11 @@ impl UI {
                                         let mut chunk_content = String::new();
                                         for path in chunk {
                                             chunk_content.push_str(&format!(
-                                                "\"{}\",{}\n",
+                                                "{};\"{}\"\n",
                                                 path.size,
-                                                path.path.replace("\"", "\"\""),
+                                                path.path
+                                                    .replace("\\", "\\\\")
+                                                    .replace("\"", "\"\""),
                                             ));
                                         }
 
