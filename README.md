@@ -18,7 +18,7 @@ You can Scan a path and then export the found paths into a CSV file.
 
 # Attribution
 
-This project is licensed under the [AGPL-3.0](LICENSE).
+This project is licensed under the [MIT License](LICENSE).
 
 Developed by [Rahn IT](https://it-rahn.de/).
 
