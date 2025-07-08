@@ -1,10 +1,14 @@
 use std::{mem, path::PathBuf, sync::Arc, time::Duration};
 
 use iced::{
-    Length, Task,
+    Alignment::Center,
+    Font, Length, Task,
     alignment::Vertical,
     task::sipper,
-    widget::{button, column, row, scrollable, text, text_input},
+    widget::{
+        button, column, horizontal_rule, horizontal_space, iced, row, scrollable, text, text_input,
+        vertical_space,
+    },
 };
 use rfd::{AsyncFileDialog, FileHandle};
 use tokio::{fs, io::AsyncWriteExt, time::Instant};
@@ -25,12 +29,13 @@ pub enum Message {
     },
     ExportCsv,
     CsvExportComplete(Result<String, String>),
+    LinkPressed(Link),
 }
 
 pub struct UI {
     selecting: bool,
     selected: Option<PathBuf>,
-    cancellation_token: Option<CancellationToken>,
+    scan_status: ScanStatus,
     paths_over_limit: Vec<OverLimit>,
     scanned: u64,
     limit_input: String,
@@ -40,6 +45,41 @@ pub struct UI {
     exporting: bool,
     export_message: Option<String>,
     export_success: bool,
+}
+
+enum ScanStatus {
+    WaitingForStart,
+    Scanning(CancellationToken),
+    Done,
+}
+
+impl ScanStatus {
+    fn is_scanning(&self) -> bool {
+        match self {
+            ScanStatus::WaitingForStart => false,
+            ScanStatus::Scanning(_) => true,
+            ScanStatus::Done => false,
+        }
+    }
+
+    fn is_done(&self) -> bool {
+        match self {
+            ScanStatus::WaitingForStart => false,
+            ScanStatus::Scanning(_) => false,
+            ScanStatus::Done => true,
+        }
+    }
+
+    fn cancel(&mut self) {
+        match self {
+            ScanStatus::WaitingForStart => (),
+            ScanStatus::Scanning(cancellation_token) => {
+                cancellation_token.cancel();
+                *self = Self::Done;
+            }
+            ScanStatus::Done => (),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -54,7 +94,7 @@ impl UI {
             Self {
                 selecting: false,
                 selected: None,
-                cancellation_token: None,
+                scan_status: ScanStatus::WaitingForStart,
                 paths_over_limit: Vec::new(),
                 scanned: 0,
                 limit_input: "240".to_string(),
@@ -84,20 +124,13 @@ impl UI {
                     if let Some(selected) = Arc::into_inner(selected) {
                         let selected: PathBuf = selected.path().into();
                         self.selected = Some(selected.clone());
+                        self.scan_status = ScanStatus::WaitingForStart;
                     }
                 }
                 Task::none()
             }
-            Message::AbortScan => {
-                if let Some(token) = self.cancellation_token.take() {
-                    token.cancel();
-                }
-                Task::none()
-            }
-            Message::ScanComplete => {
-                if let Some(token) = self.cancellation_token.take() {
-                    token.cancel();
-                }
+            Message::AbortScan | Message::ScanComplete => {
+                self.scan_status.cancel();
                 Task::none()
             }
             Message::Error(err) => {
@@ -113,12 +146,13 @@ impl UI {
             }
             Message::StartScan => {
                 if let Some(ref folder) = self.selected {
+                    self.scan_status.cancel();
                     self.paths_over_limit.clear();
                     self.errors.clear();
                     self.scanned = 0;
                     self.export_message = None;
                     let token = CancellationToken::new();
-                    self.cancellation_token = Some(token.clone());
+                    self.scan_status = ScanStatus::Scanning(token.clone());
                     self.scan_limit = self.limit;
                     self.start_scan(folder.clone(), self.limit, token)
                 } else {
@@ -223,6 +257,15 @@ impl UI {
                     }
                 }
             }
+            Message::LinkPressed(link) => {
+                let _ = open::that_in_background(match link {
+                    Link::Rust => "https://rust-lang.org",
+                    Link::Iced => "https://iced.rs",
+                    Link::RahnIT => "https://it-rahn.de",
+                });
+
+                Task::none()
+            }
         }
     }
 
@@ -253,13 +296,13 @@ impl UI {
             .align_y(Vertical::Center),
             row![
                 button(text("Start Scan")).on_press_maybe(
-                    if self.selected.is_some() && !self.cancellation_token.is_some() {
+                    if self.selected.is_some() && !self.scan_status.is_scanning() {
                         Some(Message::StartScan)
                     } else {
                         None
                     }
                 ),
-                button(text("Abort")).on_press_maybe(if self.cancellation_token.is_some() {
+                button(text("Abort")).on_press_maybe(if self.scan_status.is_scanning() {
                     Some(Message::AbortScan)
                 } else {
                     None
@@ -267,7 +310,7 @@ impl UI {
                 button(text("Export CSV")).on_press_maybe(
                     if !self.paths_over_limit.is_empty()
                         && !self.exporting
-                        && self.cancellation_token.is_none()
+                        && self.scan_status.is_done()
                     {
                         Some(Message::ExportCsv)
                     } else {
@@ -279,55 +322,71 @@ impl UI {
         ]
         .spacing(10);
 
-        let mut content = column![main_controls].spacing(20);
+        let mut content = column![main_controls].spacing(20).padding(20);
 
-        if self.cancellation_token.is_some() {
-            content =
-                content.push(text(format!("Scanning... {} paths checked", self.scanned)).size(16));
-        }
+        if self.scan_status.is_scanning() || self.scan_status.is_done() {
+            match &self.scan_status {
+                ScanStatus::WaitingForStart => (),
+                ScanStatus::Scanning(_) => {
+                    content = content
+                        .push(text(format!("Scanning... {} paths checked", self.scanned)).size(16));
+                }
+                ScanStatus::Done => {
+                    content = content.push(
+                        text(format!("Scan Finished! {} paths checked", self.scanned)).size(16),
+                    );
+                }
+            }
 
-        if !self.paths_over_limit.is_empty() {
-            let results_title = text(format!(
-                "Found {} paths over limit ({})",
-                self.paths_over_limit.len(),
-                self.scan_limit
-            ))
-            .size(18);
+            let results_title = if self.paths_over_limit.is_empty() {
+                text("No paths over limit found")
+            } else {
+                text(format!(
+                    "Found {} paths over limit ({})",
+                    self.paths_over_limit.len(),
+                    self.scan_limit
+                ))
+                .size(18)
+            };
 
             content = content.push(results_title);
+
+            if self.exporting {
+                content = content.push(text("Exporting to CSV...").size(16));
+            }
+
+            if let Some(ref message) = self.export_message {
+                let export_text = if self.export_success {
+                    text(message)
+                        .size(16)
+                        .color(iced::Color::from_rgb(0.0, 0.6, 0.0))
+                } else {
+                    text(message)
+                        .size(16)
+                        .color(iced::Color::from_rgb(0.8, 0.2, 0.2))
+                };
+                content = content.push(export_text);
+            }
+
+            if !self.errors.is_empty() {
+                let errors_title = text(format!("Errors ({})", self.errors.len()))
+                    .size(18)
+                    .color(iced::Color::from_rgb(0.8, 0.2, 0.2));
+
+                let errors_list =
+                    scrollable(column(self.errors.iter().map(|error| text(error).into())))
+                        .height(Length::Fill)
+                        .width(Length::Fill);
+
+                content = content.push(errors_title).push(errors_list);
+            }
+        } else {
+            content = content.push(vertical_space());
         }
 
-        if self.exporting {
-            content = content.push(text("Exporting to CSV...").size(16));
-        }
+        content = content.push(horizontal_rule(1)).push(footer());
 
-        if let Some(ref message) = self.export_message {
-            let export_text = if self.export_success {
-                text(message)
-                    .size(16)
-                    .color(iced::Color::from_rgb(0.0, 0.6, 0.0))
-            } else {
-                text(message)
-                    .size(16)
-                    .color(iced::Color::from_rgb(0.8, 0.2, 0.2))
-            };
-            content = content.push(export_text);
-        }
-
-        if !self.errors.is_empty() {
-            let errors_title = text(format!("Errors ({})", self.errors.len()))
-                .size(18)
-                .color(iced::Color::from_rgb(0.8, 0.2, 0.2));
-
-            let errors_list =
-                scrollable(column(self.errors.iter().map(|error| text(error).into())))
-                    .height(Length::Fill)
-                    .width(Length::Fill);
-
-            content = content.push(errors_title).push(errors_list);
-        }
-
-        content.padding(20).into()
+        content.into()
     }
 
     fn start_scan(
@@ -417,4 +476,46 @@ impl UI {
 
         Task::sip(sipper, |value| value, |_| Message::ScanComplete)
     }
+}
+
+#[derive(Clone, Debug)]
+pub enum Link {
+    Rust,
+    Iced,
+    RahnIT,
+}
+
+const FONT_SIZE: f32 = 14.0;
+fn footer<'a>() -> iced::Element<'a, Message> {
+    let text = |content| text(content).font(Font::MONOSPACE).size(FONT_SIZE);
+
+    let link = |button: button::Button<'static, Message>, link| {
+        button
+            .on_press(Message::LinkPressed(link))
+            .padding(0)
+            .style(button::text)
+    };
+
+    let rust = link(
+        button(text("🦀 Rust").shaping(text::Shaping::Advanced)),
+        Link::Rust,
+    );
+
+    let iced = link(button(iced(FONT_SIZE)), Link::Iced);
+
+    let rahn_it = link(button(text("Rahn-IT")), Link::RahnIT);
+
+    row![
+        text("Made with"),
+        rust,
+        text("and"),
+        iced,
+        horizontal_space(),
+        text("Created by"),
+        rahn_it,
+    ]
+    .height(15)
+    .spacing(7)
+    .align_y(Center)
+    .into()
 }
