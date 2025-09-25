@@ -1,15 +1,6 @@
-use std::{mem, path::PathBuf, sync::Arc, time::Duration};
+use std::{mem, ops::Not, path::PathBuf, sync::Arc, time::Duration};
 
-use iced::{
-    Alignment::Center,
-    Font, Length, Task,
-    alignment::Vertical,
-    task::sipper,
-    widget::{
-        button, column, horizontal_rule, horizontal_space, iced, row, scrollable, text, text_input,
-        vertical_space,
-    },
-};
+use iced::{Alignment::Center, Font, Length, Task, alignment::Vertical, task::sipper};
 use rfd::{AsyncFileDialog, FileHandle};
 use tokio::{fs, io::AsyncWriteExt, time::Instant};
 use tokio_util::sync::CancellationToken;
@@ -54,6 +45,14 @@ enum ScanStatus {
 }
 
 impl ScanStatus {
+    fn is_idle(&self) -> bool {
+        match self {
+            ScanStatus::WaitingForStart => true,
+            ScanStatus::Scanning(_) => false,
+            ScanStatus::Done => true,
+        }
+    }
+
     fn is_scanning(&self) -> bool {
         match self {
             ScanStatus::WaitingForStart => false,
@@ -269,7 +268,9 @@ impl UI {
         }
     }
 
-    pub fn view(&self) -> iced::Element<Message> {
+    pub fn view(&self) -> iced::Element<'_, Message> {
+        use iced::widget::{column, *};
+
         let main_controls = column![
             row![
                 button(text("Select Folder")).on_press_maybe(if self.selecting {
@@ -322,41 +323,34 @@ impl UI {
         ]
         .spacing(10);
 
-        let mut content = column![main_controls].spacing(20).padding(20);
-
-        if self.scan_status.is_scanning() || self.scan_status.is_done() {
+        column![
+            main_controls,
             match &self.scan_status {
-                ScanStatus::WaitingForStart => (),
                 ScanStatus::Scanning(_) => {
-                    content = content
-                        .push(text(format!("Scanning... {} paths checked", self.scanned)).size(16));
+                    Some(text(format!("Scanning... {} paths checked", self.scanned)).size(16))
                 }
                 ScanStatus::Done => {
-                    content = content.push(
-                        text(format!("Scan Finished! {} paths checked", self.scanned)).size(16),
-                    );
+                    Some(text(format!("Scan Finished! {} paths checked", self.scanned)).size(16))
                 }
-            }
-
-            let results_title = if self.paths_over_limit.is_empty() {
-                text("No paths over limit found")
+                ScanStatus::WaitingForStart => None,
+            },
+            if self.scan_status.is_idle() {
+                None
+            } else if self.paths_over_limit.is_empty() {
+                Some(text("No paths over limit found"))
             } else {
-                text(format!(
-                    "Found {} paths over limit ({})",
-                    self.paths_over_limit.len(),
-                    self.scan_limit
-                ))
-                .size(18)
-            };
-
-            content = content.push(results_title);
-
-            if self.exporting {
-                content = content.push(text("Exporting to CSV...").size(16));
-            }
-
-            if let Some(ref message) = self.export_message {
-                let export_text = if self.export_success {
+                Some(
+                    text(format!(
+                        "Found {} paths over limit ({})",
+                        self.paths_over_limit.len(),
+                        self.scan_limit
+                    ))
+                    .size(18),
+                )
+            },
+            self.exporting.then(|| text("Exporting to CSV...").size(16)),
+            self.export_message.as_ref().map(|message| {
+                if self.export_success {
                     text(message)
                         .size(16)
                         .color(iced::Color::from_rgb(0.0, 0.6, 0.0))
@@ -364,29 +358,25 @@ impl UI {
                     text(message)
                         .size(16)
                         .color(iced::Color::from_rgb(0.8, 0.2, 0.2))
-                };
-                content = content.push(export_text);
-            }
-
-            if !self.errors.is_empty() {
-                let errors_title = text(format!("Errors ({})", self.errors.len()))
-                    .size(18)
-                    .color(iced::Color::from_rgb(0.8, 0.2, 0.2));
-
-                let errors_list =
+                }
+            }),
+            self.errors.is_empty().not().then(|| {
+                column![
+                    text(format!("Errors ({})", self.errors.len()))
+                        .size(18)
+                        .color(iced::Color::from_rgb(0.8, 0.2, 0.2)),
                     scrollable(column(self.errors.iter().map(|error| text(error).into())))
                         .height(Length::Fill)
-                        .width(Length::Fill);
-
-                content = content.push(errors_title).push(errors_list);
-            }
-        } else {
-            content = content.push(vertical_space());
-        }
-
-        content = content.push(horizontal_rule(1)).push(footer());
-
-        content.into()
+                        .width(Length::Fill)
+                ]
+            }),
+            space::vertical(),
+            rule::horizontal(1),
+            footer(),
+        ]
+        .spacing(20)
+        .padding(20)
+        .into()
     }
 
     fn start_scan(
@@ -487,6 +477,7 @@ pub enum Link {
 
 const FONT_SIZE: f32 = 14.0;
 fn footer<'a>() -> iced::Element<'a, Message> {
+    use iced::widget::*;
     let text = |content| text(content).font(Font::MONOSPACE).size(FONT_SIZE);
 
     let link = |button: button::Button<'static, Message>, link| {
@@ -510,7 +501,7 @@ fn footer<'a>() -> iced::Element<'a, Message> {
         rust,
         text("and"),
         iced,
-        horizontal_space(),
+        space::horizontal(),
         text("Created by"),
         rahn_it,
     ]

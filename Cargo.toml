@@ -12,9 +12,9 @@ iced = { git = "https://github.com/iced-rs/iced.git", features = [
     "svg",
 ] }
 open = "5.3.2"
-rfd = { version = "0.13", features = [
+rfd = { version = "0.15", features = [
     "tokio",
     "xdg-portal",
 ], default-features = false }
-tokio = { version = "1.46.1", features = ["fs", "io-util"] }
-tokio-util = { version = "0.7.15", features = ["rt"] }
+tokio = { version = "1.47.1", features = ["fs", "io-util"] }
+tokio-util = { version = "0.7.16", features = ["rt"] }
